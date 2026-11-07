@@ -412,7 +412,3 @@ Unit tests will be added alongside each development phase.
 - This README describes the target Java design. Implementation status will be updated as modules are completed.
 
 ---
-
-## License
-
-Add the project's license and attribution information here before distributing the application.
