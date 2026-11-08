@@ -194,7 +194,7 @@ At the end of processing, the application reports total packets read, packets fo
 
 | Technology | Purpose |
 |---|---|
-| Java 17 | Main programming language |
+| Java 25 (LTS) | Main programming language and runtime |
 | Maven | Project build and dependency management |
 | `java.io` / `java.nio` | Binary PCAP file handling |
 | `ByteBuffer` | Reading multi-byte network fields |
@@ -327,7 +327,7 @@ IPv6, VLAN tags, IP fragmentation/reassembly, advanced QUIC inspection, and othe
 
 Install:
 
-1. JDK 17 or later.
+1. JDK 25 or later.
 2. Apache Maven.
 3. An IDE such as IntelliJ IDEA or Visual Studio Code (optional).
 
