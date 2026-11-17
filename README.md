@@ -1,6 +1,6 @@
-# Packet Analyzer – Java Edition
+# Packet Analyzer 
 
-A Java-based Deep Packet Inspection (DPI) application that reads packet capture files, analyzes network traffic, identifies application protocols and domains, applies filtering rules, and writes permitted packets to a new PCAP file.
+A Deep Packet Inspection (DPI) application that reads packet capture files, analyzes network traffic, identifies application protocols and domains, applies filtering rules, and writes permitted packets to a new PCAP file.
 
 > **Project status:** This project is being developed phase by phase. This README describes the target Java architecture. Features will be marked as implemented as each phase is completed.
 
