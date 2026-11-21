@@ -2,9 +2,11 @@
 package com.deeptrace.loadbalancer;
 
 import com.deeptrace.fastpath.FastPath;
+import com.deeptrace.pipeline.PacketProcessingResult;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.BlockingQueue;
 
 public final class WorkerManager {
 
@@ -13,9 +15,22 @@ public final class WorkerManager {
 
     private boolean started;
 
+    // Phase 10: Shared output queue
+    private final BlockingQueue<PacketProcessingResult> outputQueue;
+
+    // Existing Phase 9 constructor (backward compatibility)
     public WorkerManager(
             LoadBalancer loadBalancer,
             FastPath fastPath
+    ) {
+        this(loadBalancer, fastPath, null);
+    }
+
+    // Phase 10 constructor
+    public WorkerManager(
+            LoadBalancer loadBalancer,
+            FastPath fastPath,
+            BlockingQueue<PacketProcessingResult> outputQueue
     ) {
 
         if (loadBalancer == null || fastPath == null) {
@@ -25,6 +40,7 @@ public final class WorkerManager {
         }
 
         this.loadBalancer = loadBalancer;
+        this.outputQueue = outputQueue;
         this.workers = new ArrayList<>();
 
         for (int i = 0; i < loadBalancer.getWorkerCount(); i++) {
@@ -32,7 +48,8 @@ public final class WorkerManager {
             PacketWorker worker = new PacketWorker(
                     i,
                     loadBalancer,
-                    fastPath
+                    fastPath,
+                    outputQueue
             );
 
             workers.add(worker);
@@ -54,9 +71,7 @@ public final class WorkerManager {
                 worker.start();
             }
         } catch (RuntimeException exception) {
-
             stopAll();
-
             throw exception;
         }
     }
@@ -67,6 +82,14 @@ public final class WorkerManager {
             worker.stop();
         }
     }
+
+    public void gracefulStopAll() {
+
+        for (PacketWorker worker : workers) {
+            worker.gracefulStop();
+        }
+    }
+
 
     public void awaitTermination() throws InterruptedException {
 
@@ -121,5 +144,10 @@ public final class WorkerManager {
         }
 
         return true;
+    }
+
+    // Phase 10: Access to shared output queue
+    public BlockingQueue<PacketProcessingResult> getOutputQueue() {
+        return outputQueue;
     }
 }

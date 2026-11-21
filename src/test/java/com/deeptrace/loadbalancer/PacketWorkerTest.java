@@ -10,6 +10,11 @@ import com.deeptrace.reader.RawPacket;
 import com.deeptrace.rules.RuleEvaluator;
 import com.deeptrace.rules.RuleManager;
 import org.junit.jupiter.api.Test;
+import com.deeptrace.pipeline.PacketProcessingResult;
+
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -199,4 +204,81 @@ class PacketWorkerTest {
             worker.awaitTermination();
         }
     }
+
+
+    @Test
+    void shouldSendProcessingResultToOutputQueue() throws InterruptedException {
+
+        LoadBalancer loadBalancer = new LoadBalancer(2);
+
+        BlockingQueue<PacketProcessingResult> outputQueue =
+                new LinkedBlockingQueue<>();
+
+        PacketWorker worker = new PacketWorker(
+                0,
+                loadBalancer,
+                createFastPath(),
+                outputQueue
+        );
+
+        worker.start();
+
+        try {
+            RawPacket packet = createRawPacket();
+
+            var parsedPacket = new PacketParser().parse(packet);
+            loadBalancer.dispatch(packet, parsedPacket);
+
+            PacketProcessingResult result =
+                    outputQueue.poll(2, TimeUnit.SECONDS);
+
+            assertNotNull(result);
+            assertEquals(1, worker.getProcessedPackets());
+            assertEquals(0, worker.getFailedPackets());
+
+        } finally {
+            worker.stop();
+            worker.awaitTermination();
+        }
+    }
+
+    @Test
+    void shouldPreserveOriginalPacketInProcessingResult()
+            throws InterruptedException {
+
+        LoadBalancer loadBalancer = new LoadBalancer(2);
+
+        BlockingQueue<PacketProcessingResult> outputQueue =
+                new LinkedBlockingQueue<>();
+
+        PacketWorker worker = new PacketWorker(
+                0,
+                loadBalancer,
+                createFastPath(),
+                outputQueue
+        );
+
+        worker.start();
+
+        try {
+            RawPacket originalPacket = createRawPacket();
+
+            var parsedPacket = new PacketParser().parse(originalPacket);
+            loadBalancer.dispatch(originalPacket, parsedPacket);
+
+            PacketProcessingResult result =
+                    outputQueue.poll(2, TimeUnit.SECONDS);
+
+            assertNotNull(result);
+            assertSame(originalPacket, result.rawPacket());
+            assertNotNull(result.fastPathResult());
+            assertTrue(result.isAllowed());
+            assertFalse(result.isBlocked());
+
+        } finally {
+            worker.stop();
+            worker.awaitTermination();
+        }
+    }
+
 }

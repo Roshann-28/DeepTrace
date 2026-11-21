@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class LoadBalancer {
@@ -118,6 +119,24 @@ public final class LoadBalancer {
         // Waits until a packet becomes available.
         return workerQueues.get(workerIndex).take();
     }
+
+
+    public RawPacket pollPacket(int workerIndex, long timeout, TimeUnit unit)
+            throws InterruptedException {
+
+        validateWorkerIndex(workerIndex);
+
+        if (unit == null) {
+            throw new IllegalArgumentException("TimeUnit cannot be null.");
+        }
+
+        if (timeout < 0) {
+            throw new IllegalArgumentException("Timeout cannot be negative.");
+        }
+
+        return workerQueues.get(workerIndex).poll(timeout, unit);
+    }
+
 
     public int getQueueSize(int workerIndex) {
 
