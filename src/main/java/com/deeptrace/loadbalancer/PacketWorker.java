@@ -7,6 +7,10 @@ import com.deeptrace.reader.RawPacket;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.deeptrace.pipeline.PacketProcessingResult;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.TimeUnit;
+
 public final class PacketWorker implements Runnable {
 
     private final int workerId;
@@ -20,11 +24,22 @@ public final class PacketWorker implements Runnable {
 
     private volatile Thread workerThread;
     private volatile RuntimeException lastFailure;
+    private final BlockingQueue<PacketProcessingResult> outputQueue;
+    private volatile boolean gracefulShutdownRequested;
 
     public PacketWorker(
             int workerId,
             LoadBalancer loadBalancer,
             FastPath fastPath
+    ) {
+        this(workerId, loadBalancer, fastPath, null);
+    }
+
+    public PacketWorker(
+            int workerId,
+            LoadBalancer loadBalancer,
+            FastPath fastPath,
+            BlockingQueue<PacketProcessingResult> outputQueue
     ) {
         if (loadBalancer == null || fastPath == null) {
             throw new IllegalArgumentException(
@@ -41,6 +56,7 @@ public final class PacketWorker implements Runnable {
         this.workerId = workerId;
         this.loadBalancer = loadBalancer;
         this.fastPath = fastPath;
+        this.outputQueue = outputQueue;
     }
 
     public synchronized void start() {
@@ -61,33 +77,54 @@ public final class PacketWorker implements Runnable {
         workerThread.start();
     }
 
+
+
     @Override
     public void run() {
 
-        while (running.get()) {
+        try {
+            while (running.get()) {
 
-            try {
-                RawPacket packet =
-                        loadBalancer.takePacket(workerId);
+                RawPacket packet = loadBalancer.pollPacket(
+                        workerId,
+                        100,
+                        TimeUnit.MILLISECONDS
+                );
 
-                fastPath.process(packet);
+                if (packet == null) {
+                    if (gracefulShutdownRequested
+                            && loadBalancer.getQueueSize(workerId) == 0) {
+                        break;
+                    }
+                    continue;
+                }
 
-                processedPackets.incrementAndGet();
+                try {
+                    FastPath.FastPathResult result = fastPath.process(packet);
 
-            } catch (InterruptedException exception) {
+                    PacketProcessingResult processingResult =
+                            new PacketProcessingResult(packet, result);
 
-                Thread.currentThread().interrupt();
-                break;
+                    if (outputQueue != null) {
+                        outputQueue.put(processingResult);
+                    }
 
-            } catch (RuntimeException exception) {
+                    processedPackets.incrementAndGet();
 
-                lastFailure = exception;
-                failedPackets.incrementAndGet();
+                } catch (RuntimeException exception) {
+                    lastFailure = exception;
+                    failedPackets.incrementAndGet();
+                }
             }
-        }
 
-        running.set(false);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+
+        } finally {
+            running.set(false);
+        }
     }
+
 
     public void stop() {
 
@@ -128,4 +165,9 @@ public final class PacketWorker implements Runnable {
     public RuntimeException getLastFailure() {
         return lastFailure;
     }
+
+    public void gracefulStop() {
+        gracefulShutdownRequested = true;
+    }
+
 }
