@@ -1,418 +1,193 @@
-# Packet Analyzer – Java Edition
+# DeepTrace
 
-A Java-based Deep Packet Inspection (DPI) application that reads packet capture files, analyzes network traffic, identifies application protocols and domains, applies filtering rules, and writes permitted packets to a new PCAP file.
+**DeepTrace is a Java-based, multithreaded packet analyzer for offline PCAP traffic.** It parses network packets, extracts visible protocol metadata, tracks connections, classifies supported application traffic, applies filtering rules, and writes allowed packets to a new PCAP file.
 
-> **Project status:** This project is being developed phase by phase. This README describes the target Java architecture. Features will be marked as implemented as each phase is completed.
+## Features
 
----
+- **PCAP processing:** Read packet captures and write filtered capture files.
+- **Packet parsing:** Parse Ethernet, IPv4, TCP, and UDP packet information.
+- **Connection tracking:** Track flows using network connection identifiers (five-tuples).
+- **Application detection:** Use available protocol and metadata signals to identify supported applications.
+- **Protocol metadata extraction:** Extract supported DNS queries, HTTP Host information, and TLS SNI.
+- **QUIC inspection:** Process supported QUIC Initial packets.
+- **Rule-based filtering:** Filter packets based on IP addresses, domains, or detected applications.
+- **Multithreaded processing:** Distribute packet processing across worker threads using bounded queues and a five-tuple hash-based load balancer.
+- **Filtered PCAP output:** Write allowed packets to an output capture file.
+- **CLI:** Configure input/output files, worker count, queue capacity, and filtering rules from the command line.
 
-## Table of Contents
-
-1. [Project Overview](#1-project-overview)
-2. [What Is Deep Packet Inspection](#2-what-is-deep-packet-inspection)
-3. [Core Features](#3-core-features)
-4. [How Packet Analysis Works](#4-how-packet-analysis-works)
-5. [Java Technology Stack](#5-java-technology-stack)
-6. [Planned Project Structure](#6-planned-project-structure)
-7. [Development Phases](#7-development-phases)
-8. [PCAP File Format](#8-pcap-file-format)
-9. [Supported Protocols](#9-supported-protocols)
-10. [Build and Run](#10-build-and-run)
-11. [Sample Usage](#11-sample-usage)
-12. [Testing](#12-testing)
-13. [Limitations and Notes](#13-limitations-and-notes)
-
----
-
-## 1. Project Overview
-
-Packet Analyzer is a Java application for inspecting network traffic stored in PCAP (Packet Capture) files.
-
-The application is designed to:
-
-- Read packets from a PCAP file.
-- Parse Ethernet, IPv4, TCP, and UDP headers.
-- Identify network flows using a five-tuple.
-- Inspect application payloads where the required information is available.
-- Extract TLS Server Name Indication (SNI), HTTP Host, and DNS query information.
-- Classify traffic into known application categories.
-- Apply rules to block traffic based on IP address, port, application, or domain.
-- Write permitted packets to an output PCAP file.
-- Generate packet, flow, and application statistics.
-
-The initial development target is offline PCAP analysis. Live network capture and packet injection are outside the initial scope.
-
-### High-level workflow
+## Processing pipeline
 
 ```text
-             Input PCAP
-                 |
-                 v
-            PCAP Reader
-                 |
-                 v
-           Packet Parser
-                 |
-                 v
-          Flow Identification
-                 |
-                 v
-        Deep Packet Inspection
-                 |
-                 v
-       Application Classification
-                 |
-                 v
-           Rule Evaluation
-                 |
-          +------+------+
-          |             |
-          v             v
-       Allowed        Blocked
-          |             |
-          v             v
-     Output PCAP    Omitted from output
-          |
-          v
-     Analysis Report
+Input PCAP
+    |
+    v
+PCAP Reader
+    |
+    v
+Packet Parser
+    |
+    v
+Load Balancer (FiveTuple-based routing)
+    |
+    +----> Worker queues / worker threads
+    |          |
+    |          v
+    |      FastPath
+    |          |
+    |          +--> Connection tracking
+    |          +--> Metadata extraction / application detection
+    |          +--> Rule evaluation
+    |          |
+    |          v
+    |      Processing result
+    |
+    v
+Output processing
+    |
+    +---- Allowed packets ----> PCAP Writer ----> Output PCAP
+    |
+    +---- Blocked packets ---> Excluded from output
 ```
 
----
+DeepTrace analyzes saved packet captures. Filtering a packet means excluding it from the generated output PCAP; it does **not** block traffic on a live network interface.
 
-## 2. What Is Deep Packet Inspection
+## Technology stack
 
-**Deep Packet Inspection (DPI)** examines packet headers and, when available, application-layer data.
+- **Java 25** — application implementation
+- **Maven** — build and dependency management
+- **JUnit 5** — automated tests
+- **Java concurrency utilities** — worker threads and bounded blocking queues
+- **PCAP binary file handling** — packet capture reading and writing
 
-A traditional packet filter may make decisions using source IP, destination IP, protocol, and port. A DPI system can also inspect selected application-layer information to help identify the service or domain associated with a flow.
+## Requirements
 
-### Network layers used by this project
+- Java JDK 25
+- Apache Maven
 
-| Layer | Examples | Information used |
-|---|---|---|
-| Application | HTTP, TLS, DNS | Host names and protocol details |
-| Transport | TCP, UDP | Ports, flags, payload boundaries |
-| Network | IPv4 | Source and destination IP addresses |
-| Data Link | Ethernet | MAC addresses and frame type |
+## Build
 
-### Important note about HTTPS
+From the project root:
 
-HTTPS application data is encrypted. This project does not decrypt HTTPS traffic. It can inspect metadata that may be visible in a TLS handshake, such as SNI, when that information is present and accessible in the captured packets.
+```bash
+mvn package
+```
 
-Encrypted Client Hello (ECH), fragmented handshakes, incomplete captures, and other protocol conditions can prevent a domain from being visible. SNI-based identification is therefore not guaranteed for every HTTPS connection.
-
----
-
-## 3. Core Features
-
-The Java implementation is planned to include:
-
-| Feature | Description |
-|---|---|
-| PCAP reading | Read the PCAP global header and packet records |
-| Packet parsing | Parse Ethernet, IPv4, TCP, and UDP headers |
-| Flow tracking | Group packets using a five-tuple |
-| TLS inspection | Extract SNI from supported TLS ClientHello messages |
-| HTTP inspection | Extract the Host header from supported HTTP messages |
-| DNS inspection | Read DNS query names |
-| Application classification | Map recognized domains and protocol information to application categories |
-| Rule management | Maintain IP, port, domain, and application blocking rules |
-| Packet filtering | Write allowed packets to an output PCAP |
-| Statistics | Report packet counts, flow counts, classifications, and dropped packets |
-| Multithreading | Process independent flows concurrently in a later development phase |
-
-These are intended capabilities, not a claim that every feature is already implemented.
-
----
-
-## 4. How Packet Analysis Works
-
-### Step 1: Read the PCAP file
-
-The PCAP Reader opens the input file and reads its global header. It then reads packet records one at a time. Each record contains a timestamp, captured length, original packet length, and packet bytes.
-
-### Step 2: Parse the packet
-
-The Packet Parser examines packet bytes and identifies supported protocol headers. For supported Ethernet/IPv4 traffic, it extracts:
-
-- Source and destination MAC addresses.
-- Source and destination IPv4 addresses.
-- Transport protocol.
-- Source and destination ports for TCP or UDP.
-- Payload offset and payload length.
-- TCP flags, when applicable.
-
-Malformed packets and unsupported protocols must be handled safely.
-
-### Step 3: Identify the flow
-
-A flow is identified using five values:
-
-| Field | Example |
-|---|---|
-| Source IP | `192.168.1.100` |
-| Destination IP | `172.217.14.206` |
-| Source port | `54321` |
-| Destination port | `443` |
-| Protocol | TCP (`6`) |
-
-Packets with the same directional five-tuple belong to the same flow. Reverse-direction handling can be added as a separate flow-tracking policy.
-
-### Step 4: Inspect application data
-
-The inspection stage examines supported payloads:
-
-- TLS ClientHello messages may contain an SNI hostname.
-- HTTP requests may contain a Host header.
-- DNS queries contain requested domain names.
-
-### Step 5: Classify the application
-
-Recognized domains or protocol details can be mapped to application categories.
-
-| Example domain | Example category |
-|---|---|
-| `youtube.com` | YouTube |
-| `facebook.com` | Facebook |
-| `google.com` | Google |
-| `github.com` | GitHub |
-
-Classification is signature-based and depends on information visible in the capture. An unknown or unavailable signature should remain `UNKNOWN` rather than being guessed.
-
-### Step 6: Evaluate filtering rules
-
-The Rule Manager evaluates configured rules. Planned rule categories include source IP address, destination port, application category, and domain name.
-
-A packet matching a blocking rule is excluded from the output PCAP. Otherwise, its packet record and packet bytes are written to the output file.
-
-### Step 7: Generate statistics
-
-At the end of processing, the application reports total packets read, packets forwarded, packets dropped, flows observed, application classification counts, and detected domain names.
-
----
-
-## 5. Java Technology Stack
-
-| Technology | Purpose |
-|---|---|
-| Java 25 (LTS) | Main programming language and runtime |
-| Maven | Project build and dependency management |
-| `java.io` / `java.nio` | Binary PCAP file handling |
-| `ByteBuffer` | Reading multi-byte network fields |
-| Java collections | Flow tracking and rule storage |
-| `ExecutorService` | Worker-thread management |
-| `BlockingQueue` | Producer-consumer packet processing |
-| JUnit 5 | Unit testing |
-
-The first development phases will use the Java standard library wherever practical. Additional dependencies will be introduced only when they provide a clear benefit.
-
----
-
-## 6. Planned Project Structure
-
-The Java project will use the standard Maven directory layout.
+The packaged JAR is generated in the `target/` directory:
 
 ```text
-packet-analyzer-java/
-├── pom.xml
-├── README.md
-├── test_dpi.pcap
-├── output.pcap
-└── src/
-    ├── main/
-    │   └── java/com/packetanalyzer/
-    │       ├── Main.java
-    │       ├── reader/
-    │       │   ├── PcapReader.java
-    │       │   ├── PcapWriter.java
-    │       │   ├── PcapGlobalHeader.java
-    │       │   └── PcapPacketHeader.java
-    │       ├── parser/
-    │       │   └── PacketParser.java
-    │       ├── model/
-    │       │   ├── RawPacket.java
-    │       │   ├── ParsedPacket.java
-    │       │   ├── FiveTuple.java
-    │       │   └── AppType.java
-    │       ├── extractor/
-    │       │   ├── SNIExtractor.java
-    │       │   ├── HTTPHostExtractor.java
-    │       │   └── DNSExtractor.java
-    │       ├── dpi/
-    │       │   ├── DPIEngine.java
-    │       │   ├── FastPathProcessor.java
-    │       │   └── ConnectionTracker.java
-    │       ├── balancer/
-    │       │   └── LoadBalancer.java
-    │       ├── rules/
-    │       │   └── RuleManager.java
-    │       └── utils/
-    │           └── ThreadSafeQueue.java
-    └── test/java/com/packetanalyzer/
+target/deeptrace-1.0.0.jar
 ```
 
-The structure may be adjusted as implementation details become clear. Classes will be added when their responsibilities are needed.
+## Usage
 
----
+Show the command-line help:
 
-## 7. Development Phases
+```bash
+java -jar target/deeptrace-1.0.0.jar --help
+```
 
-Each phase will be implemented and tested before moving to the next one.
+Analyze a packet capture:
 
-| Phase | Module | Main outcome |
-|---|---|---|
-| 1 | Project setup and PCAP Reader | Open a PCAP file and read packet records |
-| 2 | Packet Parser | Parse Ethernet, IPv4, TCP, and UDP headers |
-| 3 | Models and Five-Tuple | Represent packets, protocols, and network flows |
-| 4 | Protocol Extractors | Extract supported TLS SNI, HTTP Host, and DNS query data |
-| 5 | Connection Tracker and Rule Manager | Track flows and evaluate filtering rules |
-| 6 | Fast Path Processor | Process and classify packets using worker threads |
-| 7 | Load Balancer and DPI Engine | Coordinate packet distribution and processing |
-| 8 | Main Application and Testing | Integrate modules, write output PCAPs, and generate reports |
+```bash
+java -jar target/deeptrace-1.0.0.jar input.pcap output.pcap
+```
 
----
+Run with eight workers:
 
-## 8. PCAP File Format
+```bash
+java -jar target/deeptrace-1.0.0.jar input.pcap output.pcap --workers 8
+```
 
-The initial reader and writer target the classic PCAP file format.
+Set worker queue capacity:
+
+```bash
+java -jar target/deeptrace-1.0.0.jar input.pcap output.pcap --queue-capacity 1000
+```
+
+Filter packets matching an IP address:
+
+```bash
+java -jar target/deeptrace-1.0.0.jar input.pcap output.pcap --block-ip 192.168.1.10
+```
+
+Filter packets matching a domain:
+
+```bash
+java -jar target/deeptrace-1.0.0.jar input.pcap output.pcap --block-domain youtube.com
+```
+
+Filter packets matching a detected application:
+
+```bash
+java -jar target/deeptrace-1.0.0.jar input.pcap output.pcap --block-app YOUTUBE
+```
+
+Available CLI options:
+
+| Option | Description |
+|---|---|
+| `--workers <number>` | Number of worker threads |
+| `--queue-capacity <number>` | Capacity of each worker queue |
+| `--block-ip <ip>` | Filter packets matching an IP address |
+| `--block-domain <domain>` | Filter packets matching a domain |
+| `--block-app <app>` | Filter packets matching a detected application |
+| `--help`, `-h` | Display usage information |
+
+## Tests
+
+The current automated test suite contains **167 tests**. The latest verified run completed with no failures, errors, or skipped tests:
 
 ```text
-+-------------------------------+
-| Global Header (24 bytes)      |
-+-------------------------------+
-| Packet Header (16 bytes)      |
-| Packet Data (variable size)   |
-+-------------------------------+
-| Packet Header (16 bytes)      |
-| Packet Data (variable size)   |
-+-------------------------------+
-| More packet records...        |
-+-------------------------------+
+Tests run: 167, Failures: 0, Errors: 0, Skipped: 0
+BUILD SUCCESS
 ```
 
-### Global header
+Run the tests with:
 
-The global header stores the magic number, major and minor format version, time-zone correction field, timestamp accuracy field, maximum captured packet length (snapshot length), and link-layer type.
+```bash
+mvn test
+```
 
-The magic number determines the file's byte order and whether timestamps use microsecond or nanosecond precision.
+## Verified sample run
 
-### Packet record header
+DeepTrace was run against `test_dpi.pcap` with eight worker threads and no filtering rules:
 
-Each packet record stores timestamp seconds, timestamp fractional component, captured packet length, and original packet length. The captured packet length determines how many packet bytes follow the record header.
+| Metric | Result |
+|---|---:|
+| Packets read | 77 |
+| Packets processed | 77 |
+| Allowed packets | 77 |
+| Blocked packets | 0 |
+| Worker failures | 0 |
+| Routing failures | 0 |
+| Output failures | 0 |
 
-The reader must validate lengths and handle end-of-file without treating a normal end-of-file as a malformed packet.
+With no filtering rules configured, all 77 packets were written to the output PCAP.
 
----
+## Supported protocols and analysis scope
 
-## 9. Supported Protocols
-
-The planned initial parsing scope is:
-
-| Protocol | Planned handling |
+| Protocol / layer | Current scope |
 |---|---|
-| Ethernet | Read frame header and EtherType |
-| IPv4 | Read addresses, protocol number, and header length |
-| TCP | Read ports, header length, flags, and payload |
-| UDP | Read ports, datagram length, and payload |
-| TLS | Extract SNI from supported ClientHello messages |
-| HTTP | Extract Host from supported plaintext HTTP requests |
-| DNS | Extract query names from supported DNS messages |
+| Ethernet | Frame parsing |
+| IPv4 | Address and protocol parsing |
+| TCP | Header and port parsing |
+| UDP | Header and port parsing |
+| DNS | Query metadata extraction where supported |
+| HTTP | Host metadata extraction where supported |
+| TLS | SNI extraction where visible and supported |
+| QUIC | Supported Initial packet processing |
 
-IPv6, VLAN tags, IP fragmentation/reassembly, advanced QUIC inspection, and other link-layer formats are potential future extensions unless added to the implementation plan.
+## Limitations
 
----
-
-## 10. Build and Run
-
-### Prerequisites
-
-Install:
-
-1. JDK 25 or later.
-2. Apache Maven.
-3. An IDE such as IntelliJ IDEA or Visual Studio Code (optional).
-
-Verify the installations:
-
-```bash
-java -version
-javac -version
-mvn -version
-```
-
-### Build the project
-
-From the project root directory:
-
-```bash
-mvn clean package
-```
-
-### Run the application
-
-The exact command-line options will be finalized when the Java `Main` class is implemented. The intended basic form is:
-
-```bash
-java -jar target/packet-analyzer-java.jar <input.pcap> <output.pcap>
-```
-
-Example:
-
-```bash
-java -jar target/packet-analyzer-java.jar test_dpi.pcap output.pcap
-```
-
----
-
-## 11. Sample Usage
-
-The planned command-line interface will support an input PCAP, an output PCAP, and optional filtering rules.
-
-Example of the intended interface:
-
-```bash
-java -jar target/packet-analyzer-java.jar capture.pcap filtered.pcap \
-  --block-ip 192.168.1.50 \
-  --block-app YouTube \
-  --block-domain youtube.com \
-  --block-port 443
-```
-
-These options describe the intended interface. They will become available as the corresponding rule-management and command-line phases are implemented.
-
----
-
-## 12. Testing
-
-The project includes PCAP samples and a test-capture generator. Planned tests include:
-
-- Reading a valid PCAP global header.
-- Reading packet records with correct timestamps and lengths.
-- Handling empty, truncated, or invalid PCAP files.
-- Parsing Ethernet and IPv4 headers.
-- Parsing TCP and UDP headers.
-- Extracting supported TLS SNI values.
-- Extracting HTTP Host values and DNS query names.
-- Tracking packets belonging to the same flow.
-- Applying and rejecting blocking rules correctly.
-- Verifying that output PCAP records are valid.
-- Checking consistent results when multithreaded processing is enabled.
-
-Unit tests will be added alongside each development phase.
-
----
-
-## 13. Limitations and Notes
-
-- This project initially analyzes saved PCAP files; it is not a live packet-capture tool.
-- The application does not decrypt HTTPS payloads.
-- SNI and HTTP Host extraction depend on the relevant bytes being present in the capture.
-- Encrypted Client Hello, fragmentation, truncated captures, and unsupported protocol variations can limit classification.
-- Application identification is based on available signatures and should not be treated as guaranteed identification.
-- Blocking in this project means omitting matching packets from the generated output PCAP. It does not automatically block traffic on a live network interface.
-- This README describes the target Java design. Implementation status will be updated as modules are completed.
-
----
+- Offline PCAP analysis only; live capture and live packet blocking are not implemented.
+- HTTPS payloads are not decrypted.
+- TLS SNI and domain extraction depend on metadata being present, visible, and supported by the parser.
+- Full TCP stream reassembly is not implemented.
+- IPv6 analysis is not implemented.
+- QUIC inspection is limited and does not cover every QUIC version or packet/frame variation.
+- Application detection uses available signatures and metadata; unknown traffic may remain unclassified.
+- Filtering removes matching packets from the output capture; it does not enforce rules on a live network.
 
 ## License
 
-Add the project's license and attribution information here before distributing the application.
+DeepTrace is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
