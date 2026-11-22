@@ -1,7 +1,29 @@
-.idea/
+# Maven build output
 target/
-*.iml
-*.class
+
+# Generated packet captures
+output_*.pcap
+*_output.pcap
+output.pcap
+deeptrace_output.pcap
+
+# Accidental local shell artifacts
+/git
+/ersroshaOneDriveDocumentsDeepTrace*
+
+# Generated Maven metadata
+/META-INF/
+
+# Local architecture diagram
+/architecture.tldr
+
+# Logs
 *.log
+
+# IDE files
+.idea/
+.vscode/
+
+# OS files
 .DS_Store
 Thumbs.db

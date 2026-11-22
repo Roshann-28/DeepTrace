@@ -209,7 +209,7 @@ class PacketWorkerTest {
     @Test
     void shouldSendProcessingResultToOutputQueue() throws InterruptedException {
 
-        LoadBalancer loadBalancer = new LoadBalancer(2);
+        LoadBalancer loadBalancer = new LoadBalancer(1);
 
         BlockingQueue<PacketProcessingResult> outputQueue =
                 new LinkedBlockingQueue<>();
